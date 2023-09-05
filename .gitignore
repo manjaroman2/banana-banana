@@ -1,3 +1,4 @@
 banana/
 tmp/
 data/
+__pycache__/
