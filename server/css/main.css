@@ -1,3 +1,7 @@
+* {
+    font-family: 'Courier New', Courier, monospace;
+}
+
 div.sortDiv,
 body {
     user-select: none;
@@ -67,37 +71,37 @@ tr.visible {
     transform: rotate(-45deg) scale(1.5);
 }
 
-.dropbtn {
-    background-color: #04aa6d;
-    color: white;
-    /* padding: 16px; */
-    font-size: 16px;
-    border: none;
-}
-
 td {
     overflow: hidden;
     white-space: nowrap;
-    /* width: 10px; */
-    /* border: solid 1px #000; */
 }
-
+tr {
+    border-bottom: solid 1px #000;
+}
 table {
     table-layout: fixed;
     border-collapse: collapse;
     width: 95%;
 }
 td.link-td {
-  transition: transform .2s; /* Animation */
+    transition: transform 0.2s; /* Animation */
 }
 td.link-td:hover {
-  transform: scale(1.2);
+    transform: scale(1.2);
 }
 
 /* The container <div> - needed to position the dropdown content */
 .dropdown {
     position: relative;
     display: inline-block;
+}
+
+.dropbtn {
+    background-color: #04aa6d;
+    color: white;
+    padding: 4px;
+    font-size: 16px;
+    border: none;
 }
 
 /* Dropdown Content (Hidden by Default) */
@@ -110,30 +114,23 @@ td.link-td:hover {
     z-index: 1;
 }
 
-/* Links inside the dropdown */
-.dropdown-content span {
+.dropdown-content > * {
     color: black;
-    padding: 2px 6px;
+    /* padding: 2px 6px; */
+    padding: 4px;
     text-decoration: none;
     position: relative;
     display: block;
-    /* border-bottom-color: gainsboro;
-    border-bottom-width: 2px;
-    border-bottom-style: solid; */
-    /* background-color: red;  */
 }
 
-/* Change color of dropdown links on hover */
-.dropdown-content span:hover {
+.dropdown-content > span:hover {
     background-color: #ddd;
 }
 
-/* Show the dropdown menu on hover */
 .dropdown:hover .dropdown-content {
     display: block;
 }
 
-/* Change the background color of the dropdown button when the dropdown content is shown */
-.dropdown:hover .dropbtn {
+.dropdown:hover {
     background-color: #3e8e41;
 }

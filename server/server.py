@@ -14,10 +14,14 @@ import atexit
 
 
 def jsonify(d) -> Response:
-    return Response(json.dumps(d, cls=utils.FrankfurtDataEncoder), mimetype="application/json")
+    return Response(
+        json.dumps(d, cls=utils.FrankfurtDataEncoder), mimetype="application/json"
+    )
+
 
 def json_error(message: str) -> Response:
     return jsonify({"error": message})
+
 
 POOL_TIME = 5
 
@@ -44,11 +48,15 @@ def send_favicon():
 
 @app.route("/")
 def hello_world():
-    return """<script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script><script src="js/main.js"></script><link rel="stylesheet" href="css/main.css">"""
+    return """
+        <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+        <script src="js/widgets.js" type="module"></script>
+        <script src="js/main.js" type="module"></script>
+        <link rel="stylesheet" href="css/main.css">"""
 
 
-@app.route("/api", methods=["GET"])
-def api():
+@app.route("/api/data", methods=["GET"])
+def api_data():
     # sort = request.args.get("s")
     # number = request.args.get("n")
 
@@ -60,7 +68,7 @@ def api():
     #     number = int(number)
     # except ValueError:
     #     return json_error("Invalid number, please use an integer")
-    
+
     # if sort == "best":
     #     _s = (-number, -1)
     # elif sort == "worst":
@@ -70,17 +78,22 @@ def api():
 
     # print(sort, number)
     global sorted_data
-    data = None 
+    data = None
     # with data_lock:
-    #     data = sorted_data[_s[0]:_s[1]]    
+    #     data = sorted_data[_s[0]:_s[1]]
     with data_lock:
         data = sorted_data
     return jsonify(data)
 
 
+@app.route("/api/info", methods=["GET"])
+def api_info():
+    return jsonify(utils.get_info())
+
+
 def main_thread():
     global sorted_data
-    global timer 
+    global timer
     for item in utils.data_generator(n=-1):
         with data_lock:
             sorted_data.append(item)
@@ -93,13 +106,15 @@ def start_main_thread():
     global timer
     timer = threading.Timer(POOL_TIME, main_thread, ())
     timer.start()
-    
+
+
 def interrupt():
     global timer
     timer.cancel()
 
+
 if __name__ == "__main__":
     start_main_thread()
     atexit.register(interrupt)
-    
+
     app.run("0.0.0.0", 5000)

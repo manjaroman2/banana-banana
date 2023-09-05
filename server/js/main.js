@@ -1,3 +1,5 @@
+import { DropdownMenu } from "/js/widgets.js";
+
 var updateInterval = undefined;
 var sortElem = undefined;
 var sortEnum = ["best", "worst"];
@@ -6,50 +8,14 @@ var sortEnumIdx = 0;
 var rightArrows = undefined;
 var leftArrows = undefined;
 var topbar = undefined;
-var tableEntriesToDisplay = 0;
-var tableTimeframeDisplay = "years1";
-var tableData = [];
+var timeframeToRow = {};
+
+var numberDropdown = new DropdownMenu("Number");
+var timeframeDropdown = new DropdownMenu("Timeframe");
 
 function round(x, ndigits = 2) {
     return Math.round(x * 10 ** ndigits) / 10 ** ndigits;
 }
-
-class DropdownMenu {
-    constructor(name) {
-        this.name = name;
-    }
-
-    createDOM(parent) {
-        this.btnText = this.name + ": ";
-        let div = document.createElement("div");
-        div.className = "dropdown";
-        this.btn = document.createElement("button");
-        this.btn.className = "dropbtn";
-        this.btn.innerHTML = this.btnText;
-        this.divContent = document.createElement("div");
-        this.divContent.className = "dropdown-content";
-
-        div.append(this.divContent);
-        div.append(this.btn);
-
-        parent.appendChild(div);
-    }
-
-    resetContentDOM() {
-        this.divContent.innerHTML = "";
-    }
-
-    addToDropdownContentDOM(text, onclick) {
-        let span = document.createElement("span");
-        span.innerHTML = text;
-        span.onclick = () => {
-            this.btn.innerHTML = this.btnText + text;
-            onclick();
-        };
-        this.divContent.append(span);
-    }
-}
-
 function clearArray(a) {
     // WHY IS THIS NOT IMPLEMENTED BY DEFAULT???
     while (a.length > 0) {
@@ -61,18 +27,6 @@ const fibs = (limit, a = 1, b = 1) =>
     a > limit
         ? [] // #1
         : [a, ...fibs(limit, b, a + b)];
-
-function getApi(callback, sort = "best", number = 10) {
-    fetch(
-        "/api?" +
-            new URLSearchParams({
-                s: sort,
-                n: number,
-            })
-    )
-        .then((response) => response.json())
-        .then((data) => callback(data));
-}
 
 var table = document.createElement("table");
 table.id = "table";
@@ -86,13 +40,11 @@ table.append(tbody);
 //     let linkHeader = document.createElement("th");
 // }
 
-function addRowToTable(fData, timespan) {
-    // console.log(fData);
-    // console.log(timespan);
+function addRowToTable(fData, timeframe) {
     let name = fData["name"];
-    let performance = round(fData["performance"][timespan]["changeInPercent"]);
+    let performance = round(fData["performance"][timeframe]["changeInPercent"]);
     let isin = fData["isin"];
-    let link = 'https://www.boerse-frankfurt.de/etf/' + fData["slug"];
+    let link = "https://www.boerse-frankfurt.de/" + fData["slug"];
     let tr = document.createElement("tr");
 
     let nameTd = document.createElement("td");
@@ -110,22 +62,24 @@ function addRowToTable(fData, timespan) {
     isinTd.style.userSelect = "text";
     let linkA = document.createElement("a");
     linkA.href = link;
-    linkA.innerHTML = link;
+    linkA.innerHTML = fData["slug"];
     linkTd.appendChild(linkA);
     linkTd.style.width = "100px";
 
     tr.append(nameTd, performanceTd, isinTd, linkTd);
     tbody.append(tr);
+
+    timeframeToRow[timeframe].push(tr);
 }
 
 function updateTableDisplayEntries() {
     let allRows = tbody.childNodes;
-    console.log(tableEntriesToDisplay);
-    for (let i = 0; i < tableEntriesToDisplay; i++) {
+    if (numberDropdown.value === "All") numberDropdown.value = allRows.length;
+    for (let i = 0; i < numberDropdown.value; i++) {
         const element = allRows[i];
         element.className = "visible";
     }
-    for (let i = tableEntriesToDisplay; i < allRows.length; i++) {
+    for (let i = numberDropdown.value; i < allRows.length; i++) {
         const element = allRows[i];
         element.className = "hidden";
     }
@@ -173,20 +127,15 @@ function createTopbar() {
     return topbar;
 }
 
-function updateTableDisplayTimeframe(jsonResponse) {
-    tbody.innerHTML = "";
-    jsonResponse.sort((a, b) => {
-        cipA = a["performance"][tableTimeframeDisplay]["changeInPercent"];
-        cipB = b["performance"][tableTimeframeDisplay]["changeInPercent"];
-        return cipA - cipB;
-    });
-    jsonResponse.reverse();
-    jsonResponse.forEach((e) =>
-        addRowToTable(e, tableTimeframeDisplay)
-    );
+function updateTableDisplayTimeframe() {
+    for (const [timeframe, rows] of Object.entries(timeframeToRow)) {
+        if (timeframe == timeframeDropdown.value)
+            rows.forEach((e) => (e.className = "visible"));
+        else rows.forEach((e) => (e.className = "hidden"));
+    }
 }
 function reverseChildren(parent) {
-    for (var i = 1; i < parent.childNodes.length; i++){
+    for (var i = 1; i < parent.childNodes.length; i++) {
         parent.insertBefore(parent.childNodes[i], parent.firstChild);
     }
 }
@@ -195,6 +144,17 @@ function updateTableSort() {
     reverseChildren(tbody);
 }
 
+function getApiData(callback, sort = "best", number = 10) {
+    fetch(
+        "/api/data?" +
+            new URLSearchParams({
+                s: sort,
+                n: number,
+            })
+    )
+        .then((response) => response.json())
+        .then((data) => callback(data));
+}
 
 window.onload = () => {
     document.body.append(createTopbar());
@@ -204,64 +164,58 @@ window.onload = () => {
     sortElem = document.getElementById("sort");
     sortElem.innerHTML = sortEnum[sortEnumIdx];
     sortElem.style.width = sortEnumLongest * 4 + "vw";
-    addFunctionalityToArrows();
+    // addFunctionalityToArrows();
 
-    let numberDropdown = new DropdownMenu("Number");
     numberDropdown.createDOM(topbar);
-
-    let timeframeDropdown = new DropdownMenu("Timeframe");
     timeframeDropdown.createDOM(topbar);
 
     if (updateInterval != undefined) clearInterval(updateInterval);
     function intervalFunction() {
-        getApi((jsonResponse) => {
+        getApiData((jsonResponse) => {
             if (jsonResponse.hasOwnProperty("error"))
                 console.error(jsonResponse);
             else if (jsonResponse.length == 0) console.info("no data");
             else {
-                console.log(jsonResponse.length);
+                // console.log(jsonResponse.length);
+                // console.log(timeframeOptions);
+                timeframeDropdown.options.forEach((timeframe) =>
+                    jsonResponse.forEach((e) => addRowToTable(e, timeframe))
+                );
 
                 // Populate number dropdown
-                numberDropdown.resetContentDOM();
-                let numberOptions = fibs(
-                    Math.floor(jsonResponse.length / 10)
-                ).map((x) => 10 * x); // I love this
-                console.log("number options: ", numberOptions);
-                for (let i = 1; i < numberOptions.length; i++) {
-                    const number = numberOptions[i];
-                    if (jsonResponse.length > number)
-                        numberDropdown.addToDropdownContentDOM(number, () => {
-                            tableEntriesToDisplay = number;
-                            updateTableDisplayEntries();
-                        });
-                    else break;
-                }
-                numberDropdown.addToDropdownContentDOM("All", () => {
-                    tableEntriesToDisplay = jsonResponse.length;
-                    updateTableDisplayEntries();
-                });
-                if (tableEntriesToDisplay == 0) tableEntriesToDisplay = jsonResponse.length;
-
-                // Populate timeframe dropdown
-                timeframeDropdown.resetContentDOM();
-                let timeframeOptions = Object.keys(
-                    jsonResponse[0]["performance"]
+                let numberOptions = fibs(Math.floor(jsonResponse.length / 10))
+                    .map((x) => 10 * x)
+                    .slice(1); // I love this
+                numberOptions.push("All");
+                numberDropdown.setOptions(
+                    numberOptions,
+                    updateTableDisplayEntries
                 );
-                timeframeOptions.forEach((timeframe) => {
-                    timeframeDropdown.addToDropdownContentDOM(
-                        timeframe,
-                        () => {
-                            tableTimeframeDisplay = timeframe;
-                            updateTableDisplayTimeframe(jsonResponse);
-                        }
-                    );
-                });
+                if (numberDropdown.value == undefined)
+                    numberDropdown.value = jsonResponse.length;
 
-                updateTableDisplayTimeframe(jsonResponse);
+                updateTableDisplayTimeframe();
                 updateTableDisplayEntries();
             }
         });
     }
+
+    function getApiInfo() {
+        fetch("/api/info")
+            .then((response) => response.json())
+            .then((data) => {
+                // Populate timeframe dropdown
+                timeframeDropdown.setOptions(
+                    data["frankfurt"]["timeframe"],
+                    updateTableDisplayTimeframe
+                );
+                for (const timeframe of timeframeDropdown.options)
+                    timeframeToRow[timeframe] = [];
+            });
+    }
+
+    getApiInfo();
+
     intervalFunction();
     // updateInterval = setInterval(() => intervalFunction(), 5000);
 };

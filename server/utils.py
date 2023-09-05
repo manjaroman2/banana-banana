@@ -1,11 +1,8 @@
-from collections.abc import Callable
 import requests as rq
 import re
 from pathlib import Path
 import json
-import stat
 import time
-import datetime
 import gzip
 import math
 from pdfminer.high_level import extract_text
@@ -13,7 +10,7 @@ from seleniumwire import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException
-from typing import Any, Generator
+from typing import Any, Iterator
 
 base_dir = Path(__file__).resolve().parent.parent
 
@@ -22,58 +19,19 @@ etfs_pdf_file = data_dir / "etfs.pdf"
 etfs_txt_file = data_dir / "etfs.txt"
 isins_data_file = data_dir / "isins"
 missing_isins_file = data_dir / "isins_missing"
-frankfurt_data_file = data_dir / "franfurt_data.json"
+frankfurt_data_file = data_dir / "frankfurt_data.json"
 if not data_dir.is_dir():
     data_dir.mkdir()
 
-tmp_dir = base_dir / "tmp"
-update_geckodriver_script_file = tmp_dir / "update_geckodriver.sh"
 
-
-# if not tmp_dir.is_dir():
-#     tmp_dir.mkdir()
 def flatten(l):
     return [item for sublist in l for item in sublist]
 
 
-def create_geckodriver_update_script():
-    geckodriver_tar = tmp_dir / "geckodriver.tar.xz"
-    script = f"""json=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest)
-if [[ $(uname) == "Darwin" ]]; then
-    url=$(echo "$json" | jq -r '.assets[].browser_download_url | select(contains("macos") and (contains(".asc") | not))')
-elif [[ $(uname) == "Linux" ]]; then
-    url=$(echo "$json" | jq -r '.assets[].browser_download_url | select(contains("linux64") and (contains(".asc") | not))')
-else
-    echo "can't determine OS"
-    exit 1
-fi
-echo $url
-curl -s -L "$url" | tar xzv -C {tmp_dir}
-chmod +x {tmp_dir / 'geckodriver'}"""
-    update_geckodriver_script_file.write_text(script)
-    update_geckodriver_script_file.chmod(
-        update_geckodriver_script_file.stat().st_mode | stat.S_IEXEC
-    )
-
-
-def update_geckodriver():
-    if not update_geckodriver_script_file.exists():
-        create_geckodriver_update_script()
-    from subprocess import Popen, PIPE
-
-    session = Popen(
-        ["bash", update_geckodriver_script_file.as_posix()], stdout=PIPE, stderr=PIPE
-    )
-    stdout, stderr = session.communicate()
-
-    if stderr:
-        raise Exception("Error " + str(stderr))
-
-    print(str(stdout))
-
-
 class FrankfurtData:
     dict_elems = ["isin", "slug", "name", "performance"]
+    info_data_type_to_slug = {"ETP": "etf", "EQUITY": "aktie"}
+    possible_timespans = ["months1", "months3", "months6", "years1", "years2", "years3"]
 
     def __init__(self) -> None:
         pass
@@ -82,7 +40,9 @@ class FrankfurtData:
     def from_data(cls, isin, info_data, performance_data) -> "FrankfurtData":
         obj = cls()
         obj.isin = isin
-        obj.slug = info_data["slug"]
+        obj.slug = (
+            cls.info_data_type_to_slug[info_data["type"]] + "/" + info_data["slug"]
+        )
         obj.name = info_data["name"]["originalValue"]
         obj.performance = performance_data
         return obj
@@ -100,7 +60,7 @@ class FrankfurtData:
                 yield elem, getattr(self, elem)
 
         return dict(inner())
-    
+
     def __repr__(self) -> str:
         return f"<FrankfurtData isin={self.isin} slug={self.slug} name={self.name} performance={self.performance}>"
 
@@ -122,7 +82,7 @@ class FrankfurtDataDecoder(json.JSONDecoder):
         return d
 
 
-def fetchen_wir(isins, timeout=3, headless=True, debug=True):
+def fetchen_wir(isins, timeout=3, headless=True, debug=True) -> Iterator[FrankfurtData]:
     opts = webdriver.ChromeOptions()
     if headless:
         opts.add_argument("--headless=new")
@@ -158,16 +118,11 @@ def fetchen_wir(isins, timeout=3, headless=True, debug=True):
                     req_times_n += 1
                     decompressed = gzip.decompress(info_request.response.body)
                     info_data = json.loads(decompressed)
-                    # print(info_request.method)
-                    # print(isin, decompressed)
                     if not info_data:
                         data_not_available = True
                     else:
                         info_data = info_data[0][0]
                     break
-                    # print(info_data)
-                    # print(info_request.__dict__)
-
                     """
                     {
                         "isin": "IE00B8KGV557",
@@ -213,28 +168,31 @@ def fetchen_wir(isins, timeout=3, headless=True, debug=True):
                 performance_data = json.loads(
                     gzip.decompress(performance_request.response.body)
                 )
-                # performance_data["isin"] = isin
                 if "isin" in performance_data:
                     del performance_data["isin"]
 
-                data_obj = FrankfurtData.from_data(isin, info_data, performance_data)
-                yield data_obj
-                data[isin] = data_obj
-                if debug:
-
-                    def log():
-                        if performance_data["years1"]:
-                            log_data = performance_data["years1"]["changeInPercent"]
-                            if log_data:
-                                print(
-                                    isin,
-                                    f"{round(log_data, 1)}%",
-                                    f"(remaining: {datetime.timedelta(seconds=math.ceil(avg_req_time * todo))}, timeout: {timeout})",
-                                    end="    ",
-                                    flush=True,
-                                )
-
-                    log()
+                for v in performance_data.values():
+                    if not v:
+                        break
+                else:
+                    data_obj: FrankfurtData = FrankfurtData.from_data(
+                        isin, info_data, performance_data
+                    )
+                    yield data_obj
+                    data[isin] = data_obj
+                    # if debug:
+                    #     def log():
+                    #         if performance_data["years1"]:
+                    #             log_data = performance_data["years1"]["changeInPercent"]
+                    #             if log_data:
+                    #                 print(
+                    #                     isin,
+                    #                     f"{round(log_data, 1)}%",
+                    #                     f"(remaining: {datetime.timedelta(seconds=math.ceil(avg_req_time * todo))}, timeout: {timeout})",
+                    #                     end="    ",
+                    #                     flush=True,
+                    #                 )
+                    #     log()
             except TimeoutException:
                 todo -= 1
                 not_found_on_ex.append(isin)
@@ -245,29 +203,10 @@ def fetchen_wir(isins, timeout=3, headless=True, debug=True):
         print("max req time:", max_req_time)
         print("timeout:", timeout)
         print(len(not_found_on_ex), "isins were not found")
-        frankfurt_data_file.write_text(json.dumps(data, cls=FrankfurtDataEncoder))
+        frankfurt_data_file.write_text(
+            json.dumps(data, indent=4, cls=FrankfurtDataEncoder)
+        )
         driver.quit()
-
-
-def isValid_ISIN_Code(str):
-    # Regex to check valid ISIN Code
-    # regex = "^[A-Z]{2}[-]{0, 1}[0-9A-Z]{8}[-]{0, 1}[0-9]{1}$"
-    regex = "([A-Z]{2})([A-Z0-9]{9})([0-9]{1})"
-
-    # Compile the ReGex
-    p = re.compile(regex)
-
-    # If the string is empty
-    # return false
-    if str == None:
-        return False
-
-    # Return if the string
-    # matched the ReGex
-    if re.search(p, str):
-        return True
-    else:
-        return False
 
 
 def get_this_shit():
@@ -296,12 +235,20 @@ def da_parsen_wir_rein(keep: bool):
         etfs_txt_file.unlink()
 
 
-def data_generator(n: int = -1) -> Generator[FrankfurtData, None, None]:
+def data_generator(n: int = -1, fetch = False) -> Iterator[FrankfurtData]:
+    """Data generator. Uses data_dir and selenium to fetch ISINs from TradeRepublic PDF.
+
+    Args:
+        n (int, optional): Number of data objects ("FrankfurtData") to generate. Defaults to -1 which produces as many as possible.
+
+    Yields:
+        Iterator[FrankfurtData]
+    """
     if not isins_data_file.exists():
         if not etfs_pdf_file.exists() or not etfs_txt_file.exists():
             get_this_shit()
         da_parsen_wir_rein(keep=True)
-    
+
     isins = isins_data_file.read_text().split("\n")
     n = min(n, len(isins))
     isins = isins[:n]
@@ -314,11 +261,20 @@ def data_generator(n: int = -1) -> Generator[FrankfurtData, None, None]:
             if isin not in frankfurt_data_store:
                 isins_not_stored.append(isin)
             else:
-                # print(frankfurt_data_store[isin])
-                yield frankfurt_data_store[isin]
+                fData: FrankfurtData = frankfurt_data_store[isin]
+                for v in fData.performance.values():
+                    if not v:
+                        break
+                else:
+                    yield fData
     else:
         isins_not_stored = isins
-    yield from fetchen_wir(isins_not_stored)
+    if fetch:
+        yield from fetchen_wir(isins_not_stored)
+
+
+def get_info():
+    return {"frankfurt": {"timeframe": FrankfurtData.possible_timespans}}
 
 
 def analyze_data(time_span="years1"):
