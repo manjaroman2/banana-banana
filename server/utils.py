@@ -2,6 +2,7 @@ import requests as rq
 import re
 from pathlib import Path
 import json
+import csv
 import time
 import gzip
 import math
@@ -9,8 +10,14 @@ from pdfminer.high_level import extract_text
 from seleniumwire import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import TimeoutException
-from typing import Any, Iterator
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.common.proxy import *
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from typing import Iterator
+from fake_useragent import UserAgent
+
+from data import DataHandler, Provider, Providers
 
 base_dir = Path(__file__).resolve().parent.parent
 
@@ -19,87 +26,65 @@ etfs_pdf_file = data_dir / "etfs.pdf"
 etfs_txt_file = data_dir / "etfs.txt"
 isins_data_file = data_dir / "isins"
 missing_isins_file = data_dir / "isins_missing"
-frankfurt_data_file = data_dir / "frankfurt_data.json"
+frankfurt_data_file = data_dir / "frankfurt_data.csv"
+frankfurt_info_file = data_dir / "frankfurt_info.json"
+proxies_data_file = data_dir / "proxies.txt"
 if not data_dir.is_dir():
     data_dir.mkdir()
 
-
-def flatten(l):
-    return [item for sublist in l for item in sublist]
+provider: Provider = Providers.frankfurt
 
 
-class FrankfurtData:
-    dict_elems = ["isin", "slug", "name", "performance"]
-    info_data_type_to_slug = {"ETP": "etf", "EQUITY": "aktie"}
-    possible_timespans = ["months1", "months3", "months6", "years1", "years2", "years3"]
-
-    def __init__(self) -> None:
-        pass
-
-    @classmethod
-    def from_data(cls, isin, info_data, performance_data) -> "FrankfurtData":
-        obj = cls()
-        obj.isin = isin
-        obj.slug = (
-            cls.info_data_type_to_slug[info_data["type"]] + "/" + info_data["slug"]
-        )
-        obj.name = info_data["name"]["originalValue"]
-        obj.performance = performance_data
-        return obj
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "FrankfurtData":
-        obj = cls()
-        for elem in cls.dict_elems:
-            setattr(obj, elem, d[elem])
-        return obj
-
-    def to_dict(self) -> dict:
-        def inner():
-            for elem in self.dict_elems:
-                yield elem, getattr(self, elem)
-
-        return dict(inner())
-
-    def __repr__(self) -> str:
-        return f"<FrankfurtData isin={self.isin} slug={self.slug} name={self.name} performance={self.performance}>"
-
-
-class FrankfurtDataEncoder(json.JSONEncoder):
-    def default(self, o):
-        if isinstance(o, FrankfurtData):
-            return o.to_dict()
-        return json.JSONEncoder.default(self, o)
-
-
-class FrankfurtDataDecoder(json.JSONDecoder):
-    def __init__(self, *args, **kwargs):
-        super().__init__(object_hook=self.object_hook, *args, **kwargs)
-
-    def object_hook(self, d: dict[str, Any]) -> Any:
-        if FrankfurtData.dict_elems == list(d.keys()):
-            return FrankfurtData.from_dict(d)
-        return d
-
-
-def fetchen_wir(isins, timeout=3, headless=True, debug=True) -> Iterator[FrankfurtData]:
+def fetchen_wir(isins, timeout=3, headless=False) -> Iterator[DataHandler]:
     opts = webdriver.ChromeOptions()
     if headless:
         opts.add_argument("--headless=new")
-
     not_found_on_ex = []
-    data = {}
+    probably_not_found_on_ex = []
+    todo = len(isins)
+    print(f"todo: {todo}")
+    max_req_time = 0
+    req_times = 0
+    req_times_n = 0
+    avg_req_time = 0
+    info_data = None
+
+    # proxy_gen = rq.get("https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=10000&country=all&ssl=all&anonymity=all").text.split("\n")
+    while not (proxies := rq.get("http://localhost:8000/api/proxies").json()):
+        time.sleep(1)
+
+    proxy, reqtime = list(proxies.items())[0]
+    print(proxy, reqtime)
+    timeout += reqtime
+    timeout *= 1.5
+    timeout = math.ceil(timeout)
+    print("timeout:", timeout)
+
+    opts.add_argument(f"--proxy-server={proxy}")
+    ua_gen = UserAgent(os="windows", min_percentage=10.0)
+    useragent = ua_gen.random
+    opts.add_argument(f"user-agent={useragent}")
+    print("user-agent:", useragent)
+    # opts.proxy = Proxy(
+    #     {
+    #         "proxyType": ProxyType.MANUAL,
+    #         # 'httpProxy': "http://127.0.0.1:8888",
+    #         "httpsProxy": f"https://{proxy}",
+    #     }
+    # )
+
     with webdriver.Chrome(options=opts) as driver:
         driver.execute_cdp_cmd("Performance.enable", {})
-        driver.get("https://www.boerse-frankfurt.de/")
-        inp = driver.find_element(By.CSS_SELECTOR, "#mat-input-0")
-        todo = len(isins)
-        print(f"todo: {todo}")
-        max_req_time = 0
-        req_times = 0
-        req_times_n = 0
-        avg_req_time = 0
-        info_data = None
+        driver.get(provider.url)
+        try:
+            inp = WebDriverWait(driver, timeout * 2).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, provider.css_input_selector)
+                )
+            )
+        except (NoSuchElementException, TimeoutException) as e:
+            driver.get_screenshot_as_file("screenshot.png")
+            raise e
         for i in range(todo):
             isin = isins[i]
             data_not_available = False
@@ -109,8 +94,9 @@ def fetchen_wir(isins, timeout=3, headless=True, debug=True) -> Iterator[Frankfu
                 inp.send_keys(isin)
                 starttime = time.time()
                 try:
+                    # https://www.wallstreet-online.de/_rpc/json/search/auto/searchInst/IE00B27YCP72
                     info_request = driver.wait_for_request(
-                        f"de\?searchTerms={isin}", timeout=timeout
+                        provider.search_param, timeout=timeout
                     )
                     # """https://api.boerse-frankfurt.de/v1/global_search/limitedsearch/de?searchTerms=IE00B1FZS798"""
                     reqtime = time.time() - starttime
@@ -123,39 +109,18 @@ def fetchen_wir(isins, timeout=3, headless=True, debug=True) -> Iterator[Frankfu
                     else:
                         info_data = info_data[0][0]
                     break
-                    """
-                    {
-                        "isin": "IE00B8KGV557",
-                        "slug": "ishares-edge-msci-em-minimum-volatility-ucits-etf-usd-acc",
-                        "wkn": null,
-                        "symbol": null,
-                        "investmentCompany": null,
-                        "issuer": null,
-                        "type": "ETP",
-                        "typeName": {
-                            "originalValue": "ETP",
-                            "translations": {}
-                        },
-                        "count": 112,
-                        "name": {
-                            "originalValue": "iShares Edge MSCI EM Minimum Volatility UCITS ETF USD (Acc)",
-                            "translations": {}
-                        }
-                    }
-                    """
-
                 except TimeoutException:
                     req_times += timeout
                     req_times_n += 1
                     continue
             if data_not_available:
-                not_found_on_ex.append(isin)
+                probably_not_found_on_ex.append(isin)
                 continue
             inp.send_keys(Keys.RETURN)
             starttime = time.time()
             try:
                 performance_request = driver.wait_for_request(
-                    f"/data/performance\?isin={isin}", timeout=timeout
+                    provider.data_search_param, timeout=timeout
                 )
                 reqtime = round(time.time() - starttime, 3)
                 req_times += reqtime
@@ -165,48 +130,46 @@ def fetchen_wir(isins, timeout=3, headless=True, debug=True) -> Iterator[Frankfu
                     max_req_time = reqtime
                 if max_req_time > avg_req_time:  # optimize the timeout
                     timeout = math.ceil(max_req_time)
-                performance_data = json.loads(
-                    gzip.decompress(performance_request.response.body)
-                )
+                try:
+                    decompressed = gzip.decompress(performance_request.response.body)
+                except gzip.BadGzipFile:
+                    probably_not_found_on_ex.append(isin)
+                    continue
+
+                performance_data = json.loads(decompressed)
                 if "isin" in performance_data:
                     del performance_data["isin"]
-
+                if "messages" in performance_data:
+                    not_found_on_ex.append(isin)
+                    continue
                 for v in performance_data.values():
                     if not v:
                         break
                 else:
-                    data_obj: FrankfurtData = FrankfurtData.from_data(
+                    yield provider.data_handler.from_data(
                         isin, info_data, performance_data
                     )
-                    yield data_obj
-                    data[isin] = data_obj
-                    # if debug:
-                    #     def log():
-                    #         if performance_data["years1"]:
-                    #             log_data = performance_data["years1"]["changeInPercent"]
-                    #             if log_data:
-                    #                 print(
-                    #                     isin,
-                    #                     f"{round(log_data, 1)}%",
-                    #                     f"(remaining: {datetime.timedelta(seconds=math.ceil(avg_req_time * todo))}, timeout: {timeout})",
-                    #                     end="    ",
-                    #                     flush=True,
-                    #                 )
-                    #     log()
             except TimeoutException:
                 todo -= 1
-                not_found_on_ex.append(isin)
+                probably_not_found_on_ex.append(isin)
                 req_times += timeout
                 req_times_n += 1
             avg_req_time = round(req_times / req_times_n, 3)
-
-        print("max req time:", max_req_time)
-        print("timeout:", timeout)
-        print(len(not_found_on_ex), "isins were not found")
-        frankfurt_data_file.write_text(
-            json.dumps(data, indent=4, cls=FrankfurtDataEncoder)
-        )
         driver.quit()
+
+    print("max req time:", max_req_time)
+    print("timeout:", timeout)
+    print(len(not_found_on_ex), "isins are NOT available on boerse-frankfurt.de")
+    print(
+        len(probably_not_found_on_ex),
+        "isins are PROBABLY NOT available on boerse-frankfurt.de",
+    )
+    info = {}
+    if frankfurt_info_file.exists():
+        info = json.loads(frankfurt_info_file.read_text())
+    info["frankfurt"]["isins_not_available"] = not_found_on_ex
+    info["frankfurt"]["isins_failed"] = probably_not_found_on_ex
+    frankfurt_info_file.write_text(json.dumps(info, indent=4))
 
 
 def get_this_shit():
@@ -235,7 +198,7 @@ def da_parsen_wir_rein(keep: bool):
         etfs_txt_file.unlink()
 
 
-def data_generator(n: int = -1, fetch = False) -> Iterator[FrankfurtData]:
+def data_generator(headless=True) -> Iterator[DataHandler]:
     """Data generator. Uses data_dir and selenium to fetch ISINs from TradeRepublic PDF.
 
     Args:
@@ -249,32 +212,58 @@ def data_generator(n: int = -1, fetch = False) -> Iterator[FrankfurtData]:
             get_this_shit()
         da_parsen_wir_rein(keep=True)
 
-    isins = isins_data_file.read_text().split("\n")
-    n = min(n, len(isins))
-    isins = isins[:n]
+    isins_not_available = []
+    if frankfurt_info_file.exists():
+        info = json.loads(frankfurt_info_file.read_text())
+        if "isins_not_available" in info["frankfurt"]:
+            isins_not_available = info["frankfurt"]["isins_not_available"]
+
+    isins_total = isins_data_file.read_text().split("\n")
     isins_not_stored = []
+    print("Total ISINs:", len(isins_total))
     if frankfurt_data_file.exists():
-        frankfurt_data_store = json.loads(
-            frankfurt_data_file.read_text(), cls=FrankfurtDataDecoder
-        )
-        for isin in isins:
-            if isin not in frankfurt_data_store:
-                isins_not_stored.append(isin)
-            else:
-                fData: FrankfurtData = frankfurt_data_store[isin]
+        frankfurt_data_store = []
+        isin_to_fdata_map = {}
+        with frankfurt_data_file.open("r+") as f:
+            reader = csv.reader(f)
+            if not next(reader, None):  # Skip header if exists, write headers otherwise
+                writer = csv.writer(f)
+                writer.writerow(provider.data_handler.dict_elems.keys())
+            for row in reader:
+                fData = provider.data_handler.from_csv(row)
+                isin_to_fdata_map[fData.isin] = fData
+                frankfurt_data_store.append(fData)
+        for isin in isins_total:
+            if isin in isin_to_fdata_map:
+                fData = isin_to_fdata_map[isin]
                 for v in fData.performance.values():
                     if not v:
                         break
                 else:
                     yield fData
+            elif isin not in isins_not_available:
+                isins_not_stored.append(isin)
     else:
-        isins_not_stored = isins
-    if fetch:
-        yield from fetchen_wir(isins_not_stored)
+        # Write headers
+        with frankfurt_data_file.open("w") as f:
+            writer = csv.writer(f)
+            writer.writerow(provider.data_handler.dict_elems.keys())
+        isins_not_stored = isins_total
+
+    with frankfurt_data_file.open("a") as f:
+        writer = csv.writer(f)
+        for fData in fetchen_wir(isins_not_stored, headless=headless):
+            writer.writerow(fData.to_csv())
+            yield fData
 
 
 def get_info():
-    return {"frankfurt": {"timeframe": FrankfurtData.possible_timespans}}
+    if frankfurt_info_file.exists():
+        info = json.loads(frankfurt_info_file.read_text())
+    else:
+        info = {"frankfurt": {"timeframe": provider.data_handler.possible_timespans}}
+        frankfurt_info_file.write_text(json.dumps(info, indent=4))
+    return info
 
 
 def analyze_data(time_span="years1"):

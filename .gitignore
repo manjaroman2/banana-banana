@@ -2,3 +2,7 @@ banana/
 tmp/
 data/
 __pycache__/
+*.json
+TradeRepublicApi/
+BeelProxy/
+test.* 

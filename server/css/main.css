@@ -1,5 +1,6 @@
 * {
-    font-family: 'Courier New', Courier, monospace;
+    font-family:'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
+    margin: 0;
 }
 
 div.sortDiv,
@@ -32,11 +33,6 @@ a:active {
     text-decoration: none;
 }
 
-table {
-    /* background-color: aqua; */
-    user-select: none;
-}
-
 tr.hidden {
     display: none;
 }
@@ -50,8 +46,8 @@ tr.visible {
     border-width: 0 3px 3px 0;
     display: inline-block;
     padding: 3px;
-    /* background-color: greenyellow; */
 }
+
 .arrow:hover {
     cursor: pointer;
 }
@@ -71,21 +67,27 @@ tr.visible {
     transform: rotate(-45deg) scale(1.5);
 }
 
-td {
+/* td {
     overflow: hidden;
     white-space: nowrap;
-}
+} */
+
 tr {
     border-bottom: solid 1px #000;
 }
-table {
-    table-layout: fixed;
-    border-collapse: collapse;
-    width: 95%;
+td {
+    max-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 35vw;
+    padding-left: 1vw;
 }
+
 td.link-td {
     transition: transform 0.2s; /* Animation */
 }
+
 td.link-td:hover {
     transform: scale(1.2);
 }
@@ -134,3 +136,77 @@ td.link-td:hover {
 .dropdown:hover {
     background-color: #3e8e41;
 }
+
+html,body {
+    height:100%;
+    /* overflow: hidden; */
+}
+
+
+table {
+    table-layout: fixed;
+    border-collapse: collapse;
+    width: 100%;
+    user-select: none;
+    z-index: -1;
+    /* overflow: scroll; */
+}
+div.outer {
+    position: relative;
+    overflow: scroll;
+    border: solid 1px black;
+    display: flex;
+    flex-direction: column;
+
+    background-color: gold;
+    height: 80%;
+    width: 80%;
+}
+div.scrollup {
+    position: fixed;
+    left: 0;
+    float: left;
+    background: rgb(3,0,60);
+    background: linear-gradient(180deg, rgba(3,0,60,1) 0%, rgba(0,212,255,0) 100%);
+    opacity: 0.2;
+    min-height: 20%;
+    width: 100%;
+}
+div.scrolldown {
+    position: fixed;
+    left: 0;
+    float: left;
+    background: rgb(2,0,36);
+    background: linear-gradient(0deg, rgba(2,0,36,1) 0%, rgba(0,212,255,0) 100%);     
+
+    opacity: 0.2;
+    min-height: 20%;
+    width: 100%;
+}
+
+/* div.tableOuterDiv {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    overflow: scroll;
+    background-color: gold;
+}
+
+div.scrolldown {
+    position: absolute;
+    bottom: 0;
+    width: inherit;
+    height: 10vh;
+    z-index: 1;
+    background-color:pink;
+    opacity: 0.5;
+}
+div.scrollup {
+    position: absolute;
+    top: 0;
+    z-index: 1;
+    width: inherit;
+    height: 10vh;
+    background-color:pink;
+    opacity: 0.5;
+} */
